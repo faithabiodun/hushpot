@@ -1,0 +1,223 @@
+/* ============================================================================
+   The Hushpot Desk — design tokens
+   A LICTOR-style autonomous trading-desk theme in the strict Zama palette:
+   acid yellow on near-black, Space Mono for data, sharp corners, a lock motif.
+   ========================================================================== */
+
+:root {
+  /* Palette */
+  --zama-yellow: #ffd208;
+  --zama-yellow-dim: #c9a700;
+  --ink-900: #0a0a0a; /* page */
+  --ink-850: #0f0f10; /* shell */
+  --ink-800: #141416; /* panel */
+  --ink-700: #1c1c20; /* raised */
+  --ink-600: #26262c; /* border */
+  --ink-500: #3a3a42; /* hairline-strong */
+  --fog-400: #6b6b76; /* muted text */
+  --fog-300: #9a9aa6; /* secondary text */
+  --fog-100: #e8e8ee; /* primary text */
+  --white: #ffffff;
+
+  /* Status LEDs */
+  --led-open: #3ad6a0; /* green — accepting */
+  --led-bidding: #ffd208; /* yellow — bids in */
+  --led-resolving: #ff9d3c; /* amber — resolving */
+  --led-settled: #7c7cff; /* indigo — settled */
+  --led-default: #ff4d5e; /* red — defaulted */
+  --led-idle: #4a4a52; /* grey — waiting */
+
+  /* Type */
+  --font-data: "Space Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+
+  /* Geometry — sharp corners everywhere */
+  --radius: 0px;
+  --hair: 1px solid var(--ink-600);
+  --hair-strong: 1px solid var(--ink-500);
+  --glow: 0 0 0 1px rgba(255, 210, 8, 0.35), 0 0 24px -6px rgba(255, 210, 8, 0.45);
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Motion */
+  --tick: 120ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(120% 80% at 50% -10%, #15150f 0%, var(--ink-900) 55%) fixed,
+    var(--ink-900);
+  color: var(--fog-100);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--zama-yellow);
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--zama-yellow);
+  color: var(--ink-900);
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-600) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--ink-600);
+}
+
+/* --- Reusable atoms --- */
+
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.eyebrow {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--fog-400);
+}
+
+.panel {
+  background: linear-gradient(180deg, var(--ink-800), var(--ink-850));
+  border: var(--hair);
+  border-radius: var(--radius);
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: var(--hair);
+}
+
+.panel__title {
+  font-family: var(--font-data);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fog-300);
+}
+
+.btn {
+  font-family: var(--font-data);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-900);
+  background: var(--zama-yellow);
+  border: 1px solid var(--zama-yellow);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  cursor: pointer;
+  transition:
+    transform var(--tick) var(--ease),
+    box-shadow var(--tick) var(--ease),
+    opacity var(--tick);
+}
+.btn:hover:not(:disabled) {
+  box-shadow: var(--glow);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn--ghost {
+  background: transparent;
+  color: var(--fog-100);
+  border: var(--hair-strong);
+}
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--zama-yellow);
+  color: var(--zama-yellow);
+  box-shadow: none;
+}
+.btn--danger {
+  background: transparent;
+  color: var(--led-default);
+  border: 1px solid var(--led-default);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--led-default);
+  color: var(--ink-900);
+  box-shadow: none;
+}
+
+.field {
+  font-family: var(--font-data);
+  font-size: 13px;
+  color: var(--fog-100);
+  background: var(--ink-900);
+  border: var(--hair-strong);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  width: 100%;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--zama-yellow);
+  box-shadow: var(--glow);
+}
+
+.led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--led-idle);
+  box-shadow: 0 0 8px -1px currentColor;
+}
+
+.tag {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: var(--hair-strong);
+  color: var(--fog-300);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
