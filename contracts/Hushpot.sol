@@ -556,6 +556,13 @@ contract Hushpot is ZamaEthereumConfig {
         return _bidders[circleId][round];
     }
 
+    /// @notice A member's sealed bid handle for a round. Returning the handle does NOT grant
+    ///         decryption: the bid was only ever allowed to this contract, so it is undecryptable
+    ///         by everyone (including the bidder). Exposed only so the frontend/tests can reference it.
+    function bidHandle(uint256 circleId, uint8 round, address member) external view returns (euint64) {
+        return _bids[circleId][round][member];
+    }
+
     // ---------------------------------------------------------------------
     // Internal
     // ---------------------------------------------------------------------

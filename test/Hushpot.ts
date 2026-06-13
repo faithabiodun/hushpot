@@ -555,4 +555,100 @@ describe("Hushpot — Phase 1", function () {
       ).to.be.revertedWithCustomError(hushpot, "CircleNotCompleted");
     });
   });
+
+  // -------------------------------------------------------------------
+  // Confidentiality guarantees (Phase 5)
+  // -------------------------------------------------------------------
+
+  describe("confidentiality", function () {
+    async function activeAndContributed(members: HardhatEthersSigner[]) {
+      await hushpot.createCircle(
+        members.map((m) => m.address),
+        CONTRIBUTION,
+        COLLATERAL,
+        FEE_BPS,
+      );
+      for (const s of members) {
+        await mint(token, tokenAddress, s, MINT);
+        await (await token.connect(s).setOperator(hushpotAddress, FAR_FUTURE)).wait();
+        const encJ = await encForHushpot(hushpotAddress, s, COLLATERAL);
+        await (await hushpot.connect(s).joinCircle(0, encJ.handles[0], encJ.inputProof)).wait();
+      }
+      for (const s of members) {
+        const encC = await encForHushpot(hushpotAddress, s, CONTRIBUTION);
+        await (await hushpot.connect(s).contribute(0, encC.handles[0], encC.inputProof)).wait();
+      }
+    }
+
+    async function bid(member: HardhatEthersSigner, amount: bigint) {
+      const enc = await encForHushpot(hushpotAddress, member, amount);
+      await (await hushpot.connect(member).submitBid(0, enc.handles[0], enc.inputProof)).wait();
+    }
+
+    async function resolveAndFinalize() {
+      const c = await hushpot.getCircle(0);
+      await ethers.provider.send("evm_setNextBlockTimestamp", [Number(c.roundDeadline) + 1]);
+      await ethers.provider.send("evm_mine", []);
+      await (await hushpot.resolveRound(0)).wait();
+      const handle = await hushpot.winnerIndexHandle(0, 0);
+      const res = await fhevm.publicDecrypt([handle]);
+      await (await hushpot.finalizeRound(0, Number(res.clearValues[handle]), res.decryptionProof)).wait();
+    }
+
+    beforeEach(async function () {
+      await activeAndContributed([signers.alice, signers.bob]);
+      await bid(signers.alice, 5n); // loser
+      await bid(signers.bob, 9n); // winner
+    });
+
+    it("a losing bid is undecryptable by the bidder", async function () {
+      await resolveAndFinalize();
+      expect(await hushpot.roundWinner(0, 0)).to.eq(signers.bob.address); // Alice lost
+
+      const aliceBid = await hushpot.bidHandle(0, 0, signers.alice.address);
+      // The contract only granted itself ACL on the bid; Alice can never decrypt it.
+      await expect(
+        fhevm.userDecryptEuint(FhevmType.euint64, aliceBid, hushpotAddress, signers.alice),
+      ).to.be.rejected;
+    });
+
+    it("even the winning bid is never exposed (only the index is revealed)", async function () {
+      await resolveAndFinalize();
+      const bobBid = await hushpot.bidHandle(0, 0, signers.bob.address);
+      await expect(
+        fhevm.userDecryptEuint(FhevmType.euint64, bobBid, hushpotAddress, signers.bob),
+      ).to.be.rejected;
+    });
+
+    it("only the winner can decrypt the pot after finalization", async function () {
+      await resolveAndFinalize();
+      const pot = await hushpot.potHandle(0);
+
+      // Winner (Bob) was granted ACL on the pot in finalizeRound.
+      const feePer = (CONTRIBUTION * BigInt(FEE_BPS)) / 10_000n;
+      const expectedPot = 2n * (CONTRIBUTION - feePer);
+      const winnerClear = await fhevm.userDecryptEuint(FhevmType.euint64, pot, hushpotAddress, signers.bob);
+      expect(winnerClear).to.eq(expectedPot);
+
+      // Loser (Alice) has no ACL on the pot.
+      await expect(
+        fhevm.userDecryptEuint(FhevmType.euint64, pot, hushpotAddress, signers.alice),
+      ).to.be.rejected;
+    });
+
+    it("the pot is undecryptable by members before a winner is finalized", async function () {
+      // Bids are in but the round is not resolved yet; nobody has pot ACL.
+      const pot = await hushpot.potHandle(0);
+      await expect(
+        fhevm.userDecryptEuint(FhevmType.euint64, pot, hushpotAddress, signers.bob),
+      ).to.be.rejected;
+    });
+
+    it("the insurance reserve is not decryptable by members", async function () {
+      const reserve = await hushpot.reserveHandle(0);
+      await expect(
+        fhevm.userDecryptEuint(FhevmType.euint64, reserve, hushpotAddress, signers.alice),
+      ).to.be.rejected;
+    });
+  });
 });
