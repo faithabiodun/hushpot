@@ -71,6 +71,24 @@ contract Hushpot is ZamaEthereumConfig {
     /// @notice circle => encrypted pot accumulated for the current round.
     mapping(uint256 => euint64) private _pot;
 
+    /// @notice circle => round => member => sealed encrypted bid for the pot.
+    mapping(uint256 => mapping(uint8 => mapping(address => euint64))) private _bids;
+
+    /// @notice circle => round => member => has submitted a bid this round (public flag).
+    mapping(uint256 => mapping(uint8 => mapping(address => bool))) public bidThisRound;
+
+    /// @notice circle => round => the eligible bidders snapshot taken at resolution.
+    mapping(uint256 => mapping(uint8 => address[])) private _bidders;
+
+    /// @notice circle => round => encrypted winning member index (into _bidders) awaiting decryption.
+    mapping(uint256 => mapping(uint8 => euint32)) private _encWinnerIdx;
+
+    /// @notice circle => round => the decrypted, settled winner address (0 until finalized).
+    mapping(uint256 => mapping(uint8 => address)) public roundWinner;
+
+    /// @notice circle => round => pot already claimed by the winner.
+    mapping(uint256 => mapping(uint8 => bool)) public potClaimed;
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -86,6 +104,11 @@ contract Hushpot is ZamaEthereumConfig {
     event CircleActivated(uint256 indexed circleId, uint64 roundDeadline);
     event Contributed(uint256 indexed circleId, uint8 indexed round, address indexed member);
     event RoundStateChanged(uint256 indexed circleId, uint8 indexed round, RoundState state);
+    event SealedBidSubmitted(uint256 indexed circleId, uint8 indexed round, address indexed member);
+    event RoundResolving(uint256 indexed circleId, uint8 indexed round, uint8 eligibleBidders);
+    event WinnerRevealed(uint256 indexed circleId, uint8 indexed round, address indexed winner);
+    event PotClaimed(uint256 indexed circleId, uint8 indexed round, address indexed winner);
+    event CircleCompleted(uint256 indexed circleId);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -101,9 +124,17 @@ contract Hushpot is ZamaEthereumConfig {
     error NotJoined();
     error CircleNotActive();
     error CircleAlreadyActive();
-    error CircleCompleted();
+    error CircleIsCompleted();
     error AlreadyContributed();
     error WrongRoundState();
+    error AlreadyWon();
+    error AlreadyBid();
+    error DeadlineNotReached();
+    error NoEligibleBidders();
+    error WinnerNotFinalized();
+    error NotTheWinner();
+    error PotAlreadyClaimed();
+    error InvalidWinnerIndex();
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -201,7 +232,7 @@ contract Hushpot is ZamaEthereumConfig {
     function contribute(uint256 circleId, externalEuint64 encAmount, bytes calldata proof) external {
         Circle storage c = _circles[circleId];
         if (!c.active) revert CircleNotActive();
-        if (c.completed) revert CircleCompleted();
+        if (c.completed) revert CircleIsCompleted();
         if (c.state != RoundState.OPEN) revert WrongRoundState();
         if (!_isMember(c, msg.sender)) revert NotAMember();
         if (!joined[circleId][msg.sender]) revert NotJoined();
@@ -233,6 +264,156 @@ contract Hushpot is ZamaEthereumConfig {
         paidThisRound[circleId][round][msg.sender] = true;
 
         emit Contributed(circleId, round, msg.sender);
+    }
+
+    // ---------------------------------------------------------------------
+    // Sealed bids & blind-auction resolution (Phase 3)
+    // ---------------------------------------------------------------------
+
+    /// @notice Submit a sealed, encrypted bid for the current round's pot. A bid expresses how
+    ///         eagerly a member wants the pot now; the most eager eligible bidder wins. Bids are
+    ///         stored as ciphertext that ONLY this contract can compute on — never decryptable by
+    ///         anyone, so losing bids stay private forever. Past winners cannot bid again.
+    /// @param circleId The active circle.
+    /// @param encBid Encrypted bid value (bound to Hushpot).
+    /// @param proof Input proof for the encrypted bid.
+    function submitBid(uint256 circleId, externalEuint64 encBid, bytes calldata proof) external {
+        Circle storage c = _circles[circleId];
+        if (!c.active) revert CircleNotActive();
+        if (c.completed) revert CircleIsCompleted();
+        if (c.state != RoundState.OPEN) revert WrongRoundState();
+        if (!_isMember(c, msg.sender)) revert NotAMember();
+        if (!joined[circleId][msg.sender]) revert NotJoined();
+        if (hasWon[circleId][msg.sender]) revert AlreadyWon();
+
+        uint8 round = c.currentRound;
+        if (bidThisRound[circleId][round][msg.sender]) revert AlreadyBid();
+
+        // Import the sealed bid into a ciphertext this contract controls. We grant ACL access ONLY
+        // to this contract (allowThis) — never to the bidder or anyone else — so the value can be
+        // compared inside resolveRound but can never be decrypted off-chain.
+        euint64 bid = FHE.fromExternal(encBid, proof);
+        FHE.allowThis(bid);
+
+        _bids[circleId][round][msg.sender] = bid;
+        bidThisRound[circleId][round][msg.sender] = true;
+        _bidders[circleId][round].push(msg.sender);
+
+        emit SealedBidSubmitted(circleId, round, msg.sender);
+    }
+
+    /// @notice Resolve the current round once the deadline has passed. Runs a branchless argmax over
+    ///         the sealed bids to find the winning member index (entirely on ciphertext), then makes
+    ///         ONLY that index publicly decryptable. No bid value is ever revealed. The circle moves
+    ///         to RESOLVING; an off-chain caller decrypts the index and calls {finalizeRound}.
+    /// @param circleId The active circle whose current round is being resolved.
+    function resolveRound(uint256 circleId) external {
+        Circle storage c = _circles[circleId];
+        if (!c.active) revert CircleNotActive();
+        if (c.completed) revert CircleIsCompleted();
+        if (c.state != RoundState.OPEN) revert WrongRoundState();
+        if (block.timestamp < c.roundDeadline) revert DeadlineNotReached();
+
+        uint8 round = c.currentRound;
+        address[] storage bidders = _bidders[circleId][round];
+        uint256 n = bidders.length;
+        if (n == 0) revert NoEligibleBidders();
+
+        // Branchless argmax: walk the bidders, carrying the best bid and its index as ciphertext.
+        // For each candidate i (>0): isMore = bid[i] > bestBid; bestBid = select(isMore, bid[i],
+        // bestBid); bestIdx = select(isMore, i, bestIdx). No plaintext branch ever touches a bid.
+        euint64 bestBid = _bids[circleId][round][bidders[0]];
+        euint32 bestIdx = FHE.asEuint32(0);
+
+        for (uint256 i = 1; i < n; i++) {
+            euint64 candidate = _bids[circleId][round][bidders[i]];
+            ebool isMore = FHE.gt(candidate, bestBid);
+            bestBid = FHE.select(isMore, candidate, bestBid);
+            bestIdx = FHE.select(isMore, FHE.asEuint32(uint32(i)), bestIdx);
+        }
+
+        // Expose ONLY the winning index for public decryption. The bids themselves remain sealed.
+        bestIdx = FHE.makePubliclyDecryptable(bestIdx);
+        FHE.allowThis(bestIdx);
+        _encWinnerIdx[circleId][round] = bestIdx;
+
+        c.state = RoundState.RESOLVING;
+        emit RoundResolving(circleId, round, uint8(n));
+        emit RoundStateChanged(circleId, round, RoundState.RESOLVING);
+    }
+
+    /// @notice Finalize a resolving round by submitting the KMS-decrypted winning index. The on-chain
+    ///         signature check guarantees the index is the genuine decryption of the argmax handle, so
+    ///         no party can forge a winner. Sets the winner, grants them ACL access to the pot, and
+    ///         advances the circle (or completes it after the last round).
+    /// @param circleId The resolving circle.
+    /// @param clearWinnerIdx The decrypted winning index into the round's bidder snapshot.
+    /// @param decryptionProof The KMS public-decryption proof for the winner-index handle.
+    function finalizeRound(uint256 circleId, uint32 clearWinnerIdx, bytes calldata decryptionProof) external {
+        Circle storage c = _circles[circleId];
+        if (c.state != RoundState.RESOLVING) revert WrongRoundState();
+
+        uint8 round = c.currentRound;
+        address[] storage bidders = _bidders[circleId][round];
+        if (clearWinnerIdx >= bidders.length) revert InvalidWinnerIndex();
+
+        // Verify the cleartext index is the authentic decryption of the on-chain argmax handle.
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = FHE.toBytes32(_encWinnerIdx[circleId][round]);
+        bytes memory cleartexts = abi.encode(clearWinnerIdx);
+        FHE.checkSignatures(handles, cleartexts, decryptionProof);
+
+        address winner = bidders[clearWinnerIdx];
+        roundWinner[circleId][round] = winner;
+        hasWon[circleId][winner] = true;
+
+        // Grant the winner permission to decrypt the pot (so the frontend can show the amount) and
+        // to spend it via the no-proof transfer when they claim.
+        FHE.allow(_pot[circleId], winner);
+
+        c.state = RoundState.SETTLED;
+        emit WinnerRevealed(circleId, round, winner);
+        emit RoundStateChanged(circleId, round, RoundState.SETTLED);
+    }
+
+    /// @notice Claim the pot for a settled round. Only the revealed winner may call. Transfers the
+    ///         encrypted pot to the winner and resets the pot for the next round, then advances the
+    ///         circle pointer (or marks it completed after the final round).
+    /// @param circleId The circle with a settled current round.
+    function claimPot(uint256 circleId) external {
+        Circle storage c = _circles[circleId];
+        if (c.state != RoundState.SETTLED) revert WrongRoundState();
+
+        uint8 round = c.currentRound;
+        address winner = roundWinner[circleId][round];
+        if (winner == address(0)) revert WinnerNotFinalized();
+        if (msg.sender != winner) revert NotTheWinner();
+        if (potClaimed[circleId][round]) revert PotAlreadyClaimed();
+
+        potClaimed[circleId][round] = true;
+
+        // Move the encrypted pot to the winner. The pot ciphertext is allowed to this contract
+        // (the holder) and was allowed to the winner in finalizeRound; transfer it out.
+        euint64 pot = _pot[circleId];
+        FHE.allowTransient(pot, address(cUSDT));
+        cUSDT.confidentialTransfer(winner, pot);
+
+        // Reset the pot for the next round.
+        _pot[circleId] = FHE.asEuint64(0);
+        FHE.allowThis(_pot[circleId]);
+
+        emit PotClaimed(circleId, round, winner);
+
+        // Advance the circle: next round, or complete after the last round.
+        if (round + 1 >= c.totalRounds) {
+            c.completed = true;
+            emit CircleCompleted(circleId);
+        } else {
+            c.currentRound = round + 1;
+            c.state = RoundState.OPEN;
+            c.roundDeadline = uint64(block.timestamp + 7 days);
+            emit RoundStateChanged(circleId, c.currentRound, RoundState.OPEN);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -284,6 +465,16 @@ contract Hushpot is ZamaEthereumConfig {
     /// @notice Encrypted pot handle for the current round.
     function potHandle(uint256 circleId) external view returns (euint64) {
         return _pot[circleId];
+    }
+
+    /// @notice Encrypted winning-index handle for a resolving round (publicly decryptable).
+    function winnerIndexHandle(uint256 circleId, uint8 round) external view returns (euint32) {
+        return _encWinnerIdx[circleId][round];
+    }
+
+    /// @notice The snapshot of eligible bidders for a round, in argmax index order.
+    function getBidders(uint256 circleId, uint8 round) external view returns (address[] memory) {
+        return _bidders[circleId][round];
     }
 
     // ---------------------------------------------------------------------
