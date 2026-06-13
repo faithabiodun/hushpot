@@ -397,4 +397,162 @@ describe("Hushpot — Phase 1", function () {
       await expect(bid(signers.bob, 100n)).to.be.revertedWithCustomError(hushpot, "AlreadyWon");
     });
   });
+
+  // -------------------------------------------------------------------
+  // Anti-default: slashing & collateral withdrawal (Phase 4)
+  // -------------------------------------------------------------------
+
+  describe("default slashing & collateral withdrawal", function () {
+    // Active 3-member circle (alice, bob, carol), all collateral locked.
+    async function activeCircle() {
+      const members = [signers.alice, signers.bob, signers.carol];
+      await hushpot.createCircle(
+        members.map((m) => m.address),
+        CONTRIBUTION,
+        COLLATERAL,
+        FEE_BPS,
+      );
+      for (const s of members) {
+        await mint(token, tokenAddress, s, MINT);
+        await (await token.connect(s).setOperator(hushpotAddress, FAR_FUTURE)).wait();
+        const encJ = await encForHushpot(hushpotAddress, s, COLLATERAL);
+        await (await hushpot.connect(s).joinCircle(0, encJ.handles[0], encJ.inputProof)).wait();
+      }
+      return members;
+    }
+
+    async function contribute(s: HardhatEthersSigner) {
+      const enc = await encForHushpot(hushpotAddress, s, CONTRIBUTION);
+      await (await hushpot.connect(s).contribute(0, enc.handles[0], enc.inputProof)).wait();
+    }
+
+    async function bid(member: HardhatEthersSigner, amount: bigint) {
+      const enc = await encForHushpot(hushpotAddress, member, amount);
+      return hushpot.connect(member).submitBid(0, enc.handles[0], enc.inputProof);
+    }
+
+    async function passDeadline() {
+      const c = await hushpot.getCircle(0);
+      await ethers.provider.send("evm_setNextBlockTimestamp", [Number(c.roundDeadline) + 1]);
+      await ethers.provider.send("evm_mine", []);
+    }
+
+    async function finalize(round: number) {
+      const handle = await hushpot.winnerIndexHandle(0, round);
+      const res = await fhevm.publicDecrypt([handle]);
+      const clearIdx = Number(res.clearValues[handle]);
+      await (await hushpot.finalizeRound(0, clearIdx, res.decryptionProof)).wait();
+    }
+
+    beforeEach(async function () {
+      await activeCircle();
+    });
+
+    it("rejects slashing before the deadline", async function () {
+      await contribute(signers.alice);
+      await expect(
+        hushpot.slashDefaulter(0, signers.carol.address),
+      ).to.be.revertedWithCustomError(hushpot, "DeadlineNotReached");
+    });
+
+    it("rejects slashing a member who paid", async function () {
+      await contribute(signers.alice);
+      await passDeadline();
+      await expect(
+        hushpot.slashDefaulter(0, signers.alice.address),
+      ).to.be.revertedWithCustomError(hushpot, "AlreadyPaid");
+    });
+
+    it("slashes a defaulter, flags default, and lets the round resolve", async function () {
+      await contribute(signers.alice);
+      await contribute(signers.bob);
+      // Carol defaults.
+      await bid(signers.alice, 5n);
+      await bid(signers.bob, 9n);
+      await passDeadline();
+
+      await expect(hushpot.slashDefaulter(0, signers.carol.address))
+        .to.emit(hushpot, "MemberDefaulted")
+        .withArgs(0, 0, signers.carol.address);
+      expect(await hushpot.defaulted(0, signers.carol.address)).to.eq(true);
+      expect(await hushpot.paidThisRound(0, 0, signers.carol.address)).to.eq(true);
+    });
+
+    it("makes the pot whole despite a default: winner still gets a full pot", async function () {
+      await contribute(signers.alice);
+      await contribute(signers.bob);
+      await bid(signers.alice, 5n);
+      await bid(signers.bob, 9n); // Bob wins
+      await passDeadline();
+      await (await hushpot.slashDefaulter(0, signers.carol.address)).wait();
+      await (await hushpot.resolveRound(0)).wait();
+      await finalize(0);
+
+      const before = await token.confidentialBalanceOf(signers.bob.address);
+      const beforeClear = await fhevm.userDecryptEuint(FhevmType.euint64, before, tokenAddress, signers.bob);
+      await (await hushpot.connect(signers.bob).claimPot(0)).wait();
+      const after = await token.confidentialBalanceOf(signers.bob.address);
+      const afterClear = await fhevm.userDecryptEuint(FhevmType.euint64, after, tokenAddress, signers.bob);
+
+      // Pot = 3 full contributions, each net of the 1% fee (carol's share came from her collateral).
+      const feePer = (CONTRIBUTION * BigInt(FEE_BPS)) / 10_000n;
+      const expectedPot = 3n * (CONTRIBUTION - feePer);
+      expect(afterClear - beforeClear).to.eq(expectedPot);
+    });
+
+    it("non-defaulters withdraw collateral after completion; defaulter forfeits", async function () {
+      // Run all 3 rounds. Carol defaults in round 0 only (she still can't win since she never bids).
+      // Round 0: alice+bob pay, carol defaults, bob wins.
+      await contribute(signers.alice);
+      await contribute(signers.bob);
+      await bid(signers.alice, 5n);
+      await bid(signers.bob, 9n);
+      await passDeadline();
+      await (await hushpot.slashDefaulter(0, signers.carol.address)).wait();
+      await (await hushpot.resolveRound(0)).wait();
+      await finalize(0);
+      await (await hushpot.connect(signers.bob).claimPot(0)).wait();
+
+      // Round 1: alice+carol pay (bob won), alice wins.
+      await contribute(signers.alice);
+      await contribute(signers.carol);
+      await bid(signers.alice, 7n);
+      await bid(signers.carol, 3n);
+      await passDeadline();
+      await (await hushpot.resolveRound(0)).wait();
+      await finalize(1);
+      await (await hushpot.connect(signers.alice).claimPot(0)).wait();
+
+      // Round 2: only carol left to win; she pays and bids, wins, completes the circle.
+      await contribute(signers.carol);
+      await bid(signers.carol, 1n);
+      await passDeadline();
+      await (await hushpot.resolveRound(0)).wait();
+      await finalize(2);
+      await (await hushpot.connect(signers.carol).claimPot(0)).wait();
+
+      expect((await hushpot.getCircle(0)).completed).to.eq(true);
+
+      // Bob never defaulted -> can withdraw his collateral.
+      const before = await token.confidentialBalanceOf(signers.bob.address);
+      const beforeClear = await fhevm.userDecryptEuint(FhevmType.euint64, before, tokenAddress, signers.bob);
+      await expect(hushpot.connect(signers.bob).withdrawCollateral(0))
+        .to.emit(hushpot, "CollateralWithdrawn")
+        .withArgs(0, signers.bob.address);
+      const after = await token.confidentialBalanceOf(signers.bob.address);
+      const afterClear = await fhevm.userDecryptEuint(FhevmType.euint64, after, tokenAddress, signers.bob);
+      expect(afterClear - beforeClear).to.eq(COLLATERAL);
+
+      // Carol defaulted in round 0 -> forfeits, cannot withdraw.
+      await expect(
+        hushpot.connect(signers.carol).withdrawCollateral(0),
+      ).to.be.revertedWithCustomError(hushpot, "MemberDefaultedForfeit");
+    });
+
+    it("rejects collateral withdrawal before completion", async function () {
+      await expect(
+        hushpot.connect(signers.alice).withdrawCollateral(0),
+      ).to.be.revertedWithCustomError(hushpot, "CircleNotCompleted");
+    });
+  });
 });

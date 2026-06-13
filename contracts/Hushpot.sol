@@ -89,6 +89,12 @@ contract Hushpot is ZamaEthereumConfig {
     /// @notice circle => round => pot already claimed by the winner.
     mapping(uint256 => mapping(uint8 => bool)) public potClaimed;
 
+    /// @notice circle => member => defaulted at least once (forfeits collateral, cannot withdraw).
+    mapping(uint256 => mapping(address => bool)) public defaulted;
+
+    /// @notice circle => member => collateral already withdrawn after completion.
+    mapping(uint256 => mapping(address => bool)) public collateralWithdrawn;
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -109,6 +115,8 @@ contract Hushpot is ZamaEthereumConfig {
     event WinnerRevealed(uint256 indexed circleId, uint8 indexed round, address indexed winner);
     event PotClaimed(uint256 indexed circleId, uint8 indexed round, address indexed winner);
     event CircleCompleted(uint256 indexed circleId);
+    event MemberDefaulted(uint256 indexed circleId, uint8 indexed round, address indexed member);
+    event CollateralWithdrawn(uint256 indexed circleId, address indexed member);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -135,6 +143,11 @@ contract Hushpot is ZamaEthereumConfig {
     error NotTheWinner();
     error PotAlreadyClaimed();
     error InvalidWinnerIndex();
+    error AlreadyPaid();
+    error AlreadyDefaulted();
+    error CircleNotCompleted();
+    error MemberDefaultedForfeit();
+    error AlreadyWithdrawn();
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -414,6 +427,72 @@ contract Hushpot is ZamaEthereumConfig {
             c.roundDeadline = uint64(block.timestamp + 7 days);
             emit RoundStateChanged(circleId, c.currentRound, RoundState.OPEN);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Anti-default: slashing & collateral withdrawal (Phase 4)
+    // ---------------------------------------------------------------------
+
+    /// @notice Slash a member who missed the current round's contribution after the deadline. Their
+    ///         locked collateral (already in the vault) makes the pot whole: the contribution share —
+    ///         net of the same insurance fee a normal payment pays — funds the pot, and everything
+    ///         the defaulter forfeits beyond that (the fee plus the surplus collateral) tops up the
+    ///         encrypted reserve. The defaulter permanently forfeits their deposit. Anyone may call
+    ///         this once the deadline has passed; it lets the round proceed to resolution.
+    /// @param circleId The active circle.
+    /// @param member The member who failed to pay this round.
+    function slashDefaulter(uint256 circleId, address member) external {
+        Circle storage c = _circles[circleId];
+        if (!c.active) revert CircleNotActive();
+        if (c.completed) revert CircleIsCompleted();
+        if (c.state != RoundState.OPEN) revert WrongRoundState();
+        if (block.timestamp < c.roundDeadline) revert DeadlineNotReached();
+        if (!_isMember(c, member)) revert NotAMember();
+        if (!joined[circleId][member]) revert NotJoined();
+
+        uint8 round = c.currentRound;
+        if (paidThisRound[circleId][round][member]) revert AlreadyPaid();
+        if (defaulted[circleId][member]) revert AlreadyDefaulted();
+
+        // The collateral is public plan data, so the split is computed with plaintext scalars and
+        // lifted into ciphertext for the encrypted pot/reserve. A defaulter's contribution is treated
+        // exactly like a paid one (same fee skim) so the pot is identical whether or not someone paid.
+        uint64 fee = uint64((uint256(c.contribution) * c.feeBps) / BPS_DENOMINATOR);
+        uint64 toPot = c.contribution - fee;
+        // Everything the defaulter loses that did not go to the pot tops up the reserve:
+        // (collateral - contribution) surplus + the fee skim.
+        uint64 toReserve = (c.collateral - c.contribution) + fee;
+
+        _pot[circleId] = FHE.add(_pot[circleId], FHE.asEuint64(toPot));
+        _reserve[circleId] = FHE.add(_reserve[circleId], FHE.asEuint64(toReserve));
+        FHE.allowThis(_pot[circleId]);
+        FHE.allowThis(_reserve[circleId]);
+
+        defaulted[circleId][member] = true;
+        // Mark paid so the round can resolve and the member is not slashed twice.
+        paidThisRound[circleId][round][member] = true;
+
+        emit MemberDefaulted(circleId, round, member);
+    }
+
+    /// @notice Reclaim collateral after the circle has completed. Members who never defaulted get
+    ///         their full deposit back; defaulters forfeited theirs and cannot withdraw.
+    /// @param circleId The completed circle.
+    function withdrawCollateral(uint256 circleId) external {
+        Circle storage c = _circles[circleId];
+        if (!c.completed) revert CircleNotCompleted();
+        if (!joined[circleId][msg.sender]) revert NotJoined();
+        if (defaulted[circleId][msg.sender]) revert MemberDefaultedForfeit();
+        if (collateralWithdrawn[circleId][msg.sender]) revert AlreadyWithdrawn();
+
+        collateralWithdrawn[circleId][msg.sender] = true;
+
+        euint64 amount = FHE.asEuint64(c.collateral);
+        FHE.allowThis(amount);
+        FHE.allowTransient(amount, address(cUSDT));
+        cUSDT.confidentialTransfer(msg.sender, amount);
+
+        emit CollateralWithdrawn(circleId, msg.sender);
     }
 
     // ---------------------------------------------------------------------
