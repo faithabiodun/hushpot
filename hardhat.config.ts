@@ -17,6 +17,17 @@ import "./tasks/hushpot";
 const MNEMONIC: string = vars.get("MNEMONIC", "test test test test test test test test test test test junk");
 const INFURA_API_KEY: string = vars.get("INFURA_API_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
 
+// Sepolia RPC endpoint. Priority:
+//   1. SEPOLIA_RPC_URL  — a full RPC URL from any provider (Alchemy, Ankr, public, etc.)
+//   2. INFURA_API_KEY   — builds the Infura URL if you have an Infura key
+//   3. a keyless public endpoint as a last-resort fallback (may be rate-limited)
+const SEPOLIA_RPC_URL: string = vars.get(
+  "SEPOLIA_RPC_URL",
+  INFURA_API_KEY !== "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    ? `https://sepolia.infura.io/v3/${INFURA_API_KEY}`
+    : "https://ethereum-sepolia-rpc.publicnode.com",
+);
+
 const config: HardhatUserConfig = {
   defaultNetwork: "hardhat",
   namedAccounts: {
@@ -55,7 +66,7 @@ const config: HardhatUserConfig = {
         count: 10,
       },
       chainId: 11155111,
-      url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
+      url: SEPOLIA_RPC_URL,
     },
   },
   paths: {
