@@ -183,10 +183,10 @@ require-corp`** headers the relayer SDK's WASM workers require.
 
 | Network | Contract | Address |
 | --- | --- | --- |
-| Sepolia | Hushpot | `<fill after deploy>` |
-| Sepolia | cUSDT (ERC-7984) | `0x4E7B06D78965594eB5EF5414c357ca21E1554491` |
+| Sepolia | Hushpot | [`0xE48daC934ab134f800ED4356f20b01E0AD5c70f7`](https://sepolia.etherscan.io/address/0xE48daC934ab134f800ED4356f20b01E0AD5c70f7) |
+| Sepolia | cUSDT (ERC-7984) | [`0x4E7B06D78965594eB5EF5414c357ca21E1554491`](https://sepolia.etherscan.io/address/0x4E7B06D78965594eB5EF5414c357ca21E1554491) |
 
-Frontend: `<Vercel URL>`
+Frontend (live): **https://hushpot-desk.vercel.app**
 
 ---
 
