@@ -3,7 +3,7 @@
 
 export const HUSHPOT_ABI = [
   // --- lifecycle ---
-  "function createCircle(address[] members, uint64 contribution, uint64 collateral, uint16 feeBps) returns (uint256)",
+  "function createCircle(address[] members, uint64 contribution, uint64 collateral, uint16 feeBps, uint32 roundDuration) returns (uint256)",
   "function joinCircle(uint256 circleId, bytes32 encCollateral, bytes proof)",
   "function contribute(uint256 circleId, bytes32 encAmount, bytes proof)",
   // --- sealed bids & resolution ---
@@ -16,7 +16,7 @@ export const HUSHPOT_ABI = [
   "function withdrawCollateral(uint256 circleId)",
   // --- views ---
   "function circleCount() view returns (uint256)",
-  "function getCircle(uint256 circleId) view returns (address[] members, uint64 contribution, uint64 collateral, uint16 feeBps, uint8 totalRounds, uint8 currentRound, uint64 roundDeadline, uint8 state, bool active, bool completed)",
+  "function getCircle(uint256 circleId) view returns (address[] members, uint64 contribution, uint64 collateral, uint16 feeBps, uint8 totalRounds, uint8 currentRound, uint64 roundDeadline, uint8 state, bool active, bool completed, uint32 roundDuration)",
   "function getMembers(uint256 circleId) view returns (address[])",
   "function getBidders(uint256 circleId, uint8 round) view returns (address[])",
   "function joined(uint256 circleId, address member) view returns (bool)",

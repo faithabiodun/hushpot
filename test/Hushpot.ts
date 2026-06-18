@@ -12,6 +12,7 @@ type Signers = {
 };
 
 const FEE_BPS = 100; // 1%
+const ROUND_DURATION = 0; // 0 => contract default (7 days); tests fast-forward past the deadline
 const CONTRIBUTION = 1_000_000n; // 1.0 cUSDT (6 decimals)
 const COLLATERAL = 2_000_000n; // 2.0 cUSDT
 const MINT = 100_000_000n; // 100 cUSDT per member
@@ -68,7 +69,7 @@ describe("Hushpot — Phase 1", function () {
   describe("createCircle", function () {
     it("creates a circle and exposes its parameters", async function () {
       const members = [signers.alice.address, signers.bob.address, signers.carol.address];
-      await expect(hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS))
+      await expect(hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION))
         .to.emit(hushpot, "CircleCreated")
         .withArgs(0, signers.deployer.address, 3, CONTRIBUTION, COLLATERAL);
 
@@ -82,19 +83,20 @@ describe("Hushpot — Phase 1", function () {
       expect(c.state).to.eq(0); // OPEN
       expect(c.active).to.eq(false);
       expect(c.completed).to.eq(false);
+      expect(c.roundDuration).to.eq(7 * 24 * 60 * 60); // default 7 days
       expect(await hushpot.circleCount()).to.eq(1);
     });
 
     it("rejects fewer than 2 members", async function () {
       await expect(
-        hushpot.createCircle([signers.alice.address], CONTRIBUTION, COLLATERAL, FEE_BPS),
+        hushpot.createCircle([signers.alice.address], CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION),
       ).to.be.revertedWithCustomError(hushpot, "InvalidMemberCount");
     });
 
     it("rejects more than MAX_MEMBERS", async function () {
       const many = Array.from({ length: 11 }, () => ethers.Wallet.createRandom().address);
       await expect(
-        hushpot.createCircle(many, CONTRIBUTION, COLLATERAL, FEE_BPS),
+        hushpot.createCircle(many, CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION),
       ).to.be.revertedWithCustomError(hushpot, "InvalidMemberCount");
     });
 
@@ -105,26 +107,45 @@ describe("Hushpot — Phase 1", function () {
           CONTRIBUTION,
           COLLATERAL,
           FEE_BPS,
+          ROUND_DURATION,
         ),
       ).to.be.revertedWithCustomError(hushpot, "DuplicateMember");
     });
 
     it("rejects a zero-address member", async function () {
       await expect(
-        hushpot.createCircle([signers.alice.address, ethers.ZeroAddress], CONTRIBUTION, COLLATERAL, FEE_BPS),
+        hushpot.createCircle([signers.alice.address, ethers.ZeroAddress], CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION),
       ).to.be.revertedWithCustomError(hushpot, "ZeroAddressMember");
     });
 
     it("rejects zero contribution", async function () {
       await expect(
-        hushpot.createCircle([signers.alice.address, signers.bob.address], 0, COLLATERAL, FEE_BPS),
+        hushpot.createCircle([signers.alice.address, signers.bob.address], 0, COLLATERAL, FEE_BPS, ROUND_DURATION),
       ).to.be.revertedWithCustomError(hushpot, "InvalidContribution");
     });
 
     it("rejects fee >= 100%", async function () {
       await expect(
-        hushpot.createCircle([signers.alice.address, signers.bob.address], CONTRIBUTION, COLLATERAL, 10_000),
+        hushpot.createCircle([signers.alice.address, signers.bob.address], CONTRIBUTION, COLLATERAL, 10_000, ROUND_DURATION),
       ).to.be.revertedWithCustomError(hushpot, "InvalidFee");
+    });
+
+    it("rejects an out-of-bounds round duration", async function () {
+      await expect(
+        hushpot.createCircle([signers.alice.address, signers.bob.address], CONTRIBUTION, COLLATERAL, FEE_BPS, 1),
+      ).to.be.revertedWithCustomError(hushpot, "InvalidRoundDuration");
+    });
+
+    it("accepts a custom in-bounds round duration", async function () {
+      const fiveMinutes = 5 * 60;
+      await hushpot.createCircle(
+        [signers.alice.address, signers.bob.address],
+        CONTRIBUTION,
+        COLLATERAL,
+        FEE_BPS,
+        fiveMinutes,
+      );
+      expect((await hushpot.getCircle(0)).roundDuration).to.eq(fiveMinutes);
     });
   });
 
@@ -135,7 +156,7 @@ describe("Hushpot — Phase 1", function () {
   describe("joinCircle", function () {
     beforeEach(async function () {
       const members = [signers.alice.address, signers.bob.address];
-      await hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS);
+      await hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION);
       await mint(token, tokenAddress, signers.alice, MINT);
       await mint(token, tokenAddress, signers.bob, MINT);
       // Members authorize Hushpot as operator on the token.
@@ -188,7 +209,7 @@ describe("Hushpot — Phase 1", function () {
   describe("contribute", function () {
     beforeEach(async function () {
       const members = [signers.alice.address, signers.bob.address];
-      await hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS);
+      await hushpot.createCircle(members, CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION);
       for (const s of [signers.alice, signers.bob]) {
         await mint(token, tokenAddress, s, MINT);
         await (await token.connect(s).setOperator(hushpotAddress, FAR_FUTURE)).wait();
@@ -231,7 +252,7 @@ describe("Hushpot — Phase 1", function () {
 
     it("rejects contribution to an inactive circle", async function () {
       // New circle, not yet activated.
-      await hushpot.createCircle([signers.alice.address, signers.bob.address], CONTRIBUTION, COLLATERAL, FEE_BPS);
+      await hushpot.createCircle([signers.alice.address, signers.bob.address], CONTRIBUTION, COLLATERAL, FEE_BPS, ROUND_DURATION);
       const enc = await encForHushpot(hushpotAddress, signers.alice, CONTRIBUTION);
       await expect(
         hushpot.connect(signers.alice).contribute(1, enc.handles[0], enc.inputProof),
@@ -251,6 +272,7 @@ describe("Hushpot — Phase 1", function () {
         CONTRIBUTION,
         COLLATERAL,
         FEE_BPS,
+        ROUND_DURATION,
       );
       for (const s of members) {
         await mint(token, tokenAddress, s, MINT);
@@ -411,6 +433,7 @@ describe("Hushpot — Phase 1", function () {
         CONTRIBUTION,
         COLLATERAL,
         FEE_BPS,
+        ROUND_DURATION,
       );
       for (const s of members) {
         await mint(token, tokenAddress, s, MINT);
@@ -567,6 +590,7 @@ describe("Hushpot — Phase 1", function () {
         CONTRIBUTION,
         COLLATERAL,
         FEE_BPS,
+        ROUND_DURATION,
       );
       for (const s of members) {
         await mint(token, tokenAddress, s, MINT);

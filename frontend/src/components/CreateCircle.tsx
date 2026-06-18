@@ -11,12 +11,19 @@ export function CreateCircle({
   open: boolean;
   onClose: () => void;
   busy: string | null;
-  onCreate: (members: string[], contribution: bigint, collateral: bigint, feeBps: number) => Promise<void>;
+  onCreate: (
+    members: string[],
+    contribution: bigint,
+    collateral: bigint,
+    feeBps: number,
+    roundDuration: number,
+  ) => Promise<void>;
 }) {
   const [membersText, setMembersText] = useState("");
   const [contribution, setContribution] = useState("1");
   const [collateral, setCollateral] = useState("2");
   const [feeBps, setFeeBps] = useState("100");
+  const [durationMin, setDurationMin] = useState("10080"); // minutes; 10080 = 7 days (contract default)
   const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
@@ -31,7 +38,10 @@ export function CreateCircle({
     for (const m of members) if (!ethers.isAddress(m)) return setError(`Invalid address: ${m}`);
     const fee = Number(feeBps);
     if (Number.isNaN(fee) || fee < 0 || fee >= 10000) return setError("Fee must be 0–9999 bps.");
-    await onCreate(members, parseToken(contribution), parseToken(collateral), fee);
+    const mins = Number(durationMin);
+    // Contract bounds: 1 minute … 30 days. We submit the value in seconds.
+    if (Number.isNaN(mins) || mins < 1 || mins > 43200) return setError("Round length must be 1–43200 minutes.");
+    await onCreate(members, parseToken(contribution), parseToken(collateral), fee, Math.round(mins * 60));
     onClose();
   };
 
@@ -62,6 +72,10 @@ export function CreateCircle({
             <div className="grow">
               <label className="eyebrow">Fee (bps)</label>
               <input className="field" value={feeBps} onChange={(e) => setFeeBps(e.target.value)} />
+            </div>
+            <div className="grow">
+              <label className="eyebrow">Round length (min)</label>
+              <input className="field" value={durationMin} onChange={(e) => setDurationMin(e.target.value)} />
             </div>
           </div>
           {error && <span className="deck__hint" style={{ color: "var(--led-default)" }}>{error}</span>}

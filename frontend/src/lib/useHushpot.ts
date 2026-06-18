@@ -68,6 +68,7 @@ export function useHushpot(wallet: WalletState) {
         totalRounds: Number(c.totalRounds),
         currentRound: Number(c.currentRound),
         roundDeadline: Number(c.roundDeadline),
+        roundDuration: Number(c.roundDuration),
         state: Number(c.state),
         active: c.active as boolean,
         completed: c.completed as boolean,
@@ -197,10 +198,10 @@ export function useHushpot(wallet: WalletState) {
   // --- Actions ---
 
   const createCircle = useCallback(
-    (members: string[], contribution: bigint, collateral: bigint, feeBps: number) =>
+    (members: string[], contribution: bigint, collateral: bigint, feeBps: number, roundDuration: number) =>
       run("create", async () => {
         if (!writeContract) throw new Error("Connect a wallet");
-        const tx = await writeContract.createCircle(members, contribution, collateral, feeBps);
+        const tx = await writeContract.createCircle(members, contribution, collateral, feeBps, roundDuration);
         const rc = await tx.wait();
         log("create", `Circle created (${members.length} seats)`, rc?.hash);
       }),

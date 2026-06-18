@@ -9,6 +9,7 @@ export type CircleView = {
   totalRounds: number;
   currentRound: number;
   roundDeadline: number;
+  roundDuration: number;
   state: number;
   active: boolean;
   completed: boolean;

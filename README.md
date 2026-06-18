@@ -48,8 +48,9 @@ transparently leaks everyone's liquidity stress and bargaining position. Hushpot
                              makePubliclyDecryptable)  binds index → winner)
 ```
 
-1. **`createCircle(members, contribution, collateral, feeBps)`** — register the group. Inactive
-   until everyone has joined.
+1. **`createCircle(members, contribution, collateral, feeBps, roundDuration)`** — register the
+   group. `roundDuration` is the per-round deadline in seconds (pass `0` for the 7-day default;
+   bounds are 1 minute … 30 days). Inactive until everyone has joined.
 2. **`joinCircle(circleId, encCollateral, proof)`** — lock collateral via the ERC-7984 operator
    flow. When the last member joins, the circle activates and the first deadline is set.
 3. **`contribute(circleId, encAmount, proof)`** — fund the pot. An insurance fee (`feeBps`) is
@@ -199,7 +200,7 @@ require-corp`** headers the relayer SDK's WASM workers require.
 
 | Network | Contract | Address |
 | --- | --- | --- |
-| Sepolia | Hushpot | [`0xE48daC934ab134f800ED4356f20b01E0AD5c70f7`](https://sepolia.etherscan.io/address/0xE48daC934ab134f800ED4356f20b01E0AD5c70f7) |
+| Sepolia | Hushpot | [`0x3075e168eC6a3A04a477b638cEf58F4CE7B46A92`](https://sepolia.etherscan.io/address/0x3075e168eC6a3A04a477b638cEf58F4CE7B46A92) |
 | Sepolia | cUSDT (ERC-7984) | [`0x4E7B06D78965594eB5EF5414c357ca21E1554491`](https://sepolia.etherscan.io/address/0x4E7B06D78965594eB5EF5414c357ca21E1554491) |
 
 Frontend (live): **https://hushpot-desk.vercel.app**
@@ -211,10 +212,11 @@ Frontend (live): **https://hushpot-desk.vercel.app**
 A circle needs **at least 2 members**, each a distinct wallet. The flow is the same on the live desk
 or via tasks. Each member needs Sepolia ETH (gas) and cUSDT (`npx hardhat hushpot:get-cusdt`).
 
-1. **Create** — one member calls `createCircle(members[], contribution, collateral, feeBps)`.
-   `members` lists every wallet (min 2, max 10), distinct.
+1. **Create** — one member calls `createCircle(members[], contribution, collateral, feeBps, roundDuration)`.
+   `members` lists every wallet (min 2, max 10), distinct. `roundDuration` is the per-round deadline
+   in seconds — pass `0` for the 7-day default, or a short value (e.g. `300` = 5 minutes) for a live demo.
 2. **Join** — **every** member calls `joinCircle` (locks collateral). The circle **auto-activates only
-   once all members have joined**; round 0 then opens with a **7-day deadline**.
+   once all members have joined**; round 0 then opens with a deadline `roundDuration` seconds out.
 3. **Contribute** — each member calls `contribute` (seals their fixed amount into the pot).
 4. **Bid** — each member submits a **sealed bid** (`submitBid`). The highest bidder wins the round; the
    amount stays private — only the *winner index* is ever revealed.
@@ -223,11 +225,12 @@ or via tasks. Each member needs Sepolia ETH (gas) and cUSDT (`npx hardhat hushpo
 6. **Claim** — the winner calls `claimPot` and receives the pot. The next round opens automatically.
 7. Repeat until every member has won once; then members `withdrawCollateral`.
 
-> **Demo note — the 7-day deadline.** `resolveRound` reverts until `block.timestamp >= roundDeadline`,
-> and the deadline is hardcoded to **7 days** after activation. For a quick end-to-end demo you can
-> either (a) wait, (b) redeploy a build with a shorter deadline for testing, or (c) demonstrate
-> create → join → contribute → bid live and show resolve/claim from the unit tests (which fast-forward
-> time). The 33-test suite (`npm run test`) exercises the full resolve→finalize→claim path.
+> **Demo note — the round deadline.** `resolveRound` reverts until `block.timestamp >= roundDeadline`.
+> The deadline is now **configurable per circle** via `roundDuration` (1 minute … 30 days; `0` ⇒ the
+> 7-day default). For a quick end-to-end demo, create the circle with a short duration (e.g. `300`
+> seconds) on the desk's **Round length (min)** field — set `5` minutes — then wait that long before
+> resolving. The 35-test suite (`npm run test`) also exercises the full resolve→finalize→claim path by
+> fast-forwarding time.
 
 ---
 

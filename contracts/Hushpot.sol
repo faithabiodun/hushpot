@@ -33,6 +33,7 @@ contract Hushpot is ZamaEthereumConfig {
         uint8 totalRounds; // == members.length
         uint8 currentRound; // 0-indexed round pointer
         uint64 roundDeadline; // unix ts; contributions/bids due by this time
+        uint32 roundDuration; // seconds each round stays open before it can be resolved
         RoundState state;
         bool active; // true once every member has joined
         bool completed; // true once all rounds have settled
@@ -51,6 +52,13 @@ contract Hushpot is ZamaEthereumConfig {
 
     /// @notice Basis-points denominator.
     uint16 public constant BPS_DENOMINATOR = 10_000;
+
+    /// @notice Default round window when a circle is created with roundDuration == 0.
+    uint32 public constant DEFAULT_ROUND_DURATION = 7 days;
+
+    /// @notice Bounds for a configurable round window: 1 minute (fast demos) to 30 days.
+    uint32 public constant MIN_ROUND_DURATION = 1 minutes;
+    uint32 public constant MAX_ROUND_DURATION = 30 days;
 
     uint256 public circleCount;
 
@@ -127,6 +135,7 @@ contract Hushpot is ZamaEthereumConfig {
     error ZeroAddressMember();
     error InvalidContribution();
     error InvalidFee();
+    error InvalidRoundDuration();
     error NotAMember();
     error AlreadyJoined();
     error NotJoined();
@@ -168,16 +177,22 @@ contract Hushpot is ZamaEthereumConfig {
     /// @param contribution Agreed per-round contribution amount (cUSDT base units).
     /// @param collateral Security deposit each member locks on join (e.g. 2x contribution).
     /// @param feeBps Insurance fee in basis points skimmed from each contribution into the reserve.
+    /// @param roundDuration Seconds each round stays open before it can be resolved. Pass 0 for the
+    ///        default (7 days); otherwise must be within [MIN_ROUND_DURATION, MAX_ROUND_DURATION].
     function createCircle(
         address[] calldata members,
         uint64 contribution,
         uint64 collateral,
-        uint16 feeBps
+        uint16 feeBps,
+        uint32 roundDuration
     ) external returns (uint256 circleId) {
         uint256 n = members.length;
         if (n < 2 || n > MAX_MEMBERS) revert InvalidMemberCount();
         if (contribution == 0) revert InvalidContribution();
         if (feeBps >= BPS_DENOMINATOR) revert InvalidFee();
+
+        uint32 duration = roundDuration == 0 ? DEFAULT_ROUND_DURATION : roundDuration;
+        if (duration < MIN_ROUND_DURATION || duration > MAX_ROUND_DURATION) revert InvalidRoundDuration();
 
         // Reject zero addresses and duplicates (O(n^2), n <= 10).
         for (uint256 i = 0; i < n; i++) {
@@ -195,6 +210,7 @@ contract Hushpot is ZamaEthereumConfig {
         c.feeBps = feeBps;
         c.totalRounds = uint8(n);
         c.currentRound = 0;
+        c.roundDuration = duration;
         c.state = RoundState.OPEN;
 
         emit CircleCreated(circleId, msg.sender, uint8(n), contribution, collateral);
@@ -230,7 +246,7 @@ contract Hushpot is ZamaEthereumConfig {
         // Activate when everyone has locked collateral.
         if (c.joinedCount == c.totalRounds) {
             c.active = true;
-            c.roundDeadline = uint64(block.timestamp + 7 days);
+            c.roundDeadline = uint64(block.timestamp + c.roundDuration);
             emit CircleActivated(circleId, c.roundDeadline);
             emit RoundStateChanged(circleId, c.currentRound, RoundState.OPEN);
         }
@@ -424,7 +440,7 @@ contract Hushpot is ZamaEthereumConfig {
         } else {
             c.currentRound = round + 1;
             c.state = RoundState.OPEN;
-            c.roundDeadline = uint64(block.timestamp + 7 days);
+            c.roundDeadline = uint64(block.timestamp + c.roundDuration);
             emit RoundStateChanged(circleId, c.currentRound, RoundState.OPEN);
         }
     }
@@ -514,7 +530,8 @@ contract Hushpot is ZamaEthereumConfig {
             uint64 roundDeadline,
             RoundState state,
             bool active,
-            bool completed
+            bool completed,
+            uint32 roundDuration
         )
     {
         Circle storage c = _circles[circleId];
@@ -528,7 +545,8 @@ contract Hushpot is ZamaEthereumConfig {
             c.roundDeadline,
             c.state,
             c.active,
-            c.completed
+            c.completed,
+            c.roundDuration
         );
     }
 
