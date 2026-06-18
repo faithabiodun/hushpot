@@ -148,6 +148,22 @@ npx hardhat hushpot:circle --id 0 --network sepolia
 The deploy uses the official Sepolia cUSDT wrapper
 `0x4E7B06D78965594eB5EF5414c357ca21E1554491` (override with `CUSDT_ADDRESS` if Zama rotates it).
 
+### Get test cUSDT
+
+To join a circle and contribute you need confidential **cUSDT**. cUSDT is a *wrapper*
+(`ConfidentialWrapperV3`) over an underlying mock USDT, so getting it is: mint the public mock USDT
+→ approve the wrapper → wrap. One task does all three for the deployer account:
+
+```bash
+npx hardhat hushpot:get-cusdt --amount 1000 --network sepolia
+# or send it elsewhere:
+npx hardhat hushpot:get-cusdt --amount 1000 --to 0xYourOtherAccount --network sepolia
+```
+
+The resulting balance is **encrypted on-chain** (that's the point) — `confidentialBalanceOf` returns a
+ciphertext handle, not a number. The underlying mock USDT is `0xa7dA08FafDC9097Cc0E7D4f113A61e31d7e8e9b0`
+and has an open `mint`, so anyone can self-fund test tokens (gas only).
+
 ---
 
 ## The Hushpot Desk (frontend)
