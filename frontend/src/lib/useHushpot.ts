@@ -7,13 +7,25 @@ import type { CircleView, Seat, DeskEvent } from "./types";
 import type { WalletState } from "./useWallet";
 
 const FAR_FUTURE_OPERATOR = 2_000_000_000; // uint48 deadline for setOperator
+const CIRCLE_ID_KEY = "hushpot.circleId";
 
 function shortHash(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
+/// Remember the last circle the user was looking at, so a refresh/return lands on it.
+function loadCircleId(): number {
+  try {
+    const raw = localStorage.getItem(CIRCLE_ID_KEY);
+    const n = raw === null ? 0 : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function useHushpot(wallet: WalletState) {
-  const [circleId, setCircleId] = useState<number>(0);
+  const [circleId, setCircleId] = useState<number>(loadCircleId);
   const [circle, setCircle] = useState<CircleView | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
   const [events, setEvents] = useState<DeskEvent[]>([]);
@@ -97,6 +109,15 @@ export function useHushpot(wallet: WalletState) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Persist the selected circle id across visits.
+  useEffect(() => {
+    try {
+      localStorage.setItem(CIRCLE_ID_KEY, String(circleId));
+    } catch {
+      // ignore storage failures (private mode, quota)
+    }
+  }, [circleId]);
 
   // Subscribe to on-chain events for the live log.
   useEffect(() => {
