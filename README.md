@@ -206,6 +206,31 @@ Frontend (live): **https://hushpot-desk.vercel.app**
 
 ---
 
+## Run a full round (walkthrough)
+
+A circle needs **at least 2 members**, each a distinct wallet. The flow is the same on the live desk
+or via tasks. Each member needs Sepolia ETH (gas) and cUSDT (`npx hardhat hushpot:get-cusdt`).
+
+1. **Create** — one member calls `createCircle(members[], contribution, collateral, feeBps)`.
+   `members` lists every wallet (min 2, max 10), distinct.
+2. **Join** — **every** member calls `joinCircle` (locks collateral). The circle **auto-activates only
+   once all members have joined**; round 0 then opens with a **7-day deadline**.
+3. **Contribute** — each member calls `contribute` (seals their fixed amount into the pot).
+4. **Bid** — each member submits a **sealed bid** (`submitBid`). The highest bidder wins the round; the
+   amount stays private — only the *winner index* is ever revealed.
+5. **Resolve** — after the **round deadline passes**, anyone calls `resolveRound` → off-chain
+   public-decrypt of the winner index → `finalizeRound`. (The desk's "Resolve" does all three.)
+6. **Claim** — the winner calls `claimPot` and receives the pot. The next round opens automatically.
+7. Repeat until every member has won once; then members `withdrawCollateral`.
+
+> **Demo note — the 7-day deadline.** `resolveRound` reverts until `block.timestamp >= roundDeadline`,
+> and the deadline is hardcoded to **7 days** after activation. For a quick end-to-end demo you can
+> either (a) wait, (b) redeploy a build with a shorter deadline for testing, or (c) demonstrate
+> create → join → contribute → bid live and show resolve/claim from the unit tests (which fast-forward
+> time). The 33-test suite (`npm run test`) exercises the full resolve→finalize→claim path.
+
+---
+
 ## Roadmap (Phase 2 ideas)
 
 - **Encrypted reserve payouts** — let the insurance reserve cover a missed contribution before
