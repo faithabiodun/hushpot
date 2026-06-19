@@ -13,6 +13,36 @@ function shortHash(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
+// Plain-language messages for the custom errors a member is most likely to hit. ethers decodes the
+// revert to `err.revert.name` once the error fragment is in the ABI (see abi.ts); we map that name
+// to something a non-technical user can act on, and fall back to the raw message otherwise.
+const ERROR_HINTS: Record<string, string> = {
+  ERC7984ZeroBalance: "this wallet has no cUSDT. Get test cUSDT for it first, then retry.",
+  ERC7984UnauthorizedSpender: "Hushpot isn't authorised to move your cUSDT — approve the operator prompt, then retry.",
+  ERC7984UnauthorizedUseOfEncryptedAmount: "the encrypted amount wasn't authorised for the token. Refresh and retry.",
+  SenderNotAllowedToUseHandle: "the encrypted input was rejected. Refresh the page and retry.",
+  BlockedUser: "this wallet is blocked on the cUSDT token.",
+  UnderlyingDenyListedAddress: "this wallet is deny-listed on the underlying token.",
+  NotAMember: "this wallet isn't a member of this circle (check the circle id and the address).",
+  AlreadyJoined: "you've already joined this circle.",
+  CircleAlreadyActive: "this circle is already active — everyone has joined.",
+  NotJoined: "join the circle first (lock collateral).",
+  AlreadyContributed: "you've already contributed this round.",
+  AlreadyBid: "you've already bid this round.",
+  AlreadyWon: "you've already won a round in this circle.",
+  DeadlineNotReached: "the round deadline hasn't passed yet — wait, then resolve.",
+  WrongRoundState: "the round isn't in the right state for this action yet.",
+  NotTheWinner: "only this round's winner can claim the pot.",
+};
+
+function friendlyError(err: unknown): string {
+  const e = err as { revert?: { name?: string }; shortMessage?: string; message?: string };
+  const name = e?.revert?.name;
+  if (name && ERROR_HINTS[name]) return ERROR_HINTS[name];
+  if (name) return name;
+  return e?.shortMessage ?? (e as Error)?.message ?? "unknown error";
+}
+
 /// Remember the last circle the user was looking at, so a refresh/return lands on it.
 function loadCircleId(): number {
   try {
@@ -185,8 +215,7 @@ export function useHushpot(wallet: WalletState) {
       try {
         await fn();
       } catch (err: unknown) {
-        const msg = (err as { shortMessage?: string; message?: string }).shortMessage ?? (err as Error).message;
-        log("error", `${label} failed: ${msg}`);
+        log("error", `${label} failed: ${friendlyError(err)}`);
       } finally {
         setBusy(null);
         await refresh();
@@ -314,8 +343,7 @@ export function useHushpot(wallet: WalletState) {
       setPotClear(clear);
       log("reveal", "Pot decrypted for you");
     } catch (err: unknown) {
-      const msg = (err as { shortMessage?: string; message?: string }).shortMessage ?? (err as Error).message;
-      log("error", `Pot reveal failed: ${msg}`);
+      log("error", `Pot reveal failed: ${friendlyError(err)}`);
     }
   }, [readContract, wallet.signer, circleId, log]);
 

@@ -43,6 +43,16 @@ export const HUSHPOT_ABI = [
   "event CircleCompleted(uint256 indexed circleId)",
   "event MemberDefaulted(uint256 indexed circleId, uint8 indexed round, address indexed member)",
   "event CollateralWithdrawn(uint256 indexed circleId, address indexed member)",
+  // --- cUSDT (ERC-7984) errors, included so reverts from the token decode to a name rather than
+  //     surfacing as "unknown custom error". euint64/externalEuint64 are bytes32 on the wire. ---
+  "error ERC7984ZeroBalance(address holder)",
+  "error ERC7984UnauthorizedSpender(address holder, address spender)",
+  "error ERC7984UnauthorizedUseOfEncryptedAmount(bytes32 amount, address user)",
+  "error ERC7984InvalidReceiver(address receiver)",
+  "error ERC7984UnauthorizedCaller(address caller)",
+  "error SenderNotAllowedToUseHandle(bytes32 handle, address sender)",
+  "error BlockedUser(address user)",
+  "error UnderlyingDenyListedAddress(address user)",
 ] as const;
 
 // ERC-7984 confidential token (cUSDT): only what the Desk needs.
